@@ -133,6 +133,31 @@ impl Ipv4Cidr {
             },
         }
     }
+
+    /// Same as `addresses()`, provided for consistency with stdlib conventions.
+    pub fn iter(&self) -> Ipv4CidrIter {
+        self.addresses()
+    }
+
+    /// Splits this network into smaller subnets of the given prefix length.
+    /// Returns an empty vector if the new prefix length is not larger than
+    /// the current one (you can't split into bigger networks).
+    pub fn split(&self, new_prefix_len: u8) -> Vec<Ipv4Cidr> {
+        if new_prefix_len <= self.prefix_len || new_prefix_len > 32 {
+            return Vec::new();
+        }
+
+        let count = 1u64 << (new_prefix_len - self.prefix_len);
+        let step = 1u64 << (32 - new_prefix_len);
+        let start = self.network().to_bits() as u64;
+
+        (0..count)
+            .map(|i| {
+                let addr = Ipv4Addr::from_bits((start + i * step) as u32);
+                Ipv4Cidr::new(addr, new_prefix_len).unwrap()
+            })
+            .collect()
+    }
 }
 
 impl fmt::Display for Ipv4Cidr {
@@ -299,5 +324,41 @@ mod tests {
         assert_eq!(evens.len(), 5);
         assert_eq!(evens[0], Ipv4Addr::new(10, 0, 0, 2));
         assert_eq!(evens[4], Ipv4Addr::new(10, 0, 0, 10));
+    }
+
+    #[test]
+    fn splits_into_smaller_subnets() {
+        let cidr: Ipv4Cidr = "192.168.1.0/24".parse().unwrap();
+        let subnets = cidr.split(26);
+        assert_eq!(subnets.len(), 4);
+        assert_eq!(subnets[0].to_string(), "192.168.1.0/26");
+        assert_eq!(subnets[1].to_string(), "192.168.1.64/26");
+        assert_eq!(subnets[2].to_string(), "192.168.1.128/26");
+        assert_eq!(subnets[3].to_string(), "192.168.1.192/26");
+    }
+
+    #[test]
+    fn splits_into_halves() {
+        let cidr: Ipv4Cidr = "10.0.0.0/8".parse().unwrap();
+        let subnets = cidr.split(9);
+        assert_eq!(subnets.len(), 2);
+        assert_eq!(subnets[0].to_string(), "10.0.0.0/9");
+        assert_eq!(subnets[1].to_string(), "10.128.0.0/9");
+    }
+
+    #[test]
+    fn split_rejects_invalid_prefix() {
+        let cidr: Ipv4Cidr = "192.168.1.0/24".parse().unwrap();
+        assert!(cidr.split(24).is_empty()); // same prefix
+        assert!(cidr.split(20).is_empty()); // larger network
+        assert!(cidr.split(33).is_empty()); // out of range
+    }
+
+    #[test]
+    fn split_preserves_address_space() {
+        let cidr: Ipv4Cidr = "10.0.0.0/16".parse().unwrap();
+        let subnets = cidr.split(18);
+        let total: u64 = subnets.iter().map(|s| s.total_addresses()).sum();
+        assert_eq!(total, cidr.total_addresses());
     }
 }
