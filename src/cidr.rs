@@ -2,7 +2,21 @@ use crate::{Ipv4Addr, ParseError};
 use std::fmt;
 use std::str::FromStr;
 
-/// An iterator over the addresses in a network
+/// An iterator over the IPv4 addresses in an [`Ipv4Cidr`].
+///
+/// Returned by [`Ipv4Cidr::addresses`], [`Ipv4Cidr::hosts`],
+/// [`Ipv4Cidr::iter`], and `IntoIterator for &Ipv4Cidr`.
+///
+/// # Examples
+///
+/// ```
+/// use ipnet_rs::Ipv4Cidr;
+///
+/// let cidr: Ipv4Cidr = "10.0.0.0/30".parse().unwrap();
+/// for addr in &cidr {
+///     println!("{addr}");
+/// }
+/// ```
 pub struct Ipv4CidrIter {
     current: u32,
     end: u32,
@@ -42,10 +56,46 @@ pub struct Ipv4Cidr {
     prefix_len: u8,
 }
 
+/// An IPv4 CIDR network: an address and a prefix length.
+///
+/// The prefix length is the number of leading bits that identify the network.
+/// `192.168.1.0/24` means the top 24 bits identify the network and the
+/// bottom 8 bits identify hosts within it.
+///
+/// The stored address need not be the network address; methods like
+/// [`network`](Self::network) and [`broadcast`](Self::broadcast) compute
+/// the canonical addresses from whatever address you passed in.
+///
+/// # Examples
+///
+/// ```
+/// use ipnet_rs::{Ipv4Addr, Ipv4Cidr};
+///
+/// let net: Ipv4Cidr = "192.168.1.42/24".parse().unwrap();
+/// assert_eq!(net.network(), Ipv4Addr::new(192, 168, 1, 0));
+/// assert_eq!(net.broadcast(), Ipv4Addr::new(192, 168, 1, 255));
+/// assert_eq!(net.usable_hosts(), 254);
+/// ```
 impl Ipv4Cidr {
-    /// Creates a new CIDR network.
+    /// Creates a new CIDR network from an address and prefix length.
     ///
-    /// Returns an error if the prefix length is greater than 32.
+    /// The address does not need to be the network address. To get the
+    /// canonical network address, call [`network`](Self::network).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParseError::InvalidPrefixLength`] if `prefix_len > 32`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ipnet_rs::{Ipv4Addr, Ipv4Cidr};
+    ///
+    /// let cidr = Ipv4Cidr::new(Ipv4Addr::new(10, 0, 0, 0), 8).unwrap();
+    /// assert_eq!(cidr.to_string(), "10.0.0.0/8");
+    ///
+    /// assert!(Ipv4Cidr::new(Ipv4Addr::new(0, 0, 0, 0), 33).is_err());
+    /// ```
     pub fn new(address: Ipv4Addr, prefix_len: u8) -> Result<Self, ParseError> {
         if prefix_len > 32 {
             return Err(ParseError::InvalidPrefixLength(prefix_len.to_string()));
@@ -56,15 +106,40 @@ impl Ipv4Cidr {
         })
     }
 
+    /// Returns the address this network was constructed with.
+    ///
+    /// This is *not* necessarily the network address; for that, use
+    /// [`network`](Self::network).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ipnet_rs::{Ipv4Addr, Ipv4Cidr};
+    ///
+    /// let cidr: Ipv4Cidr = "192.168.1.42/24".parse().unwrap();
+    /// assert_eq!(cidr.address(), Ipv4Addr::new(192, 168, 1, 42));
+    /// assert_eq!(cidr.network(), Ipv4Addr::new(192, 168, 1, 0));
+    /// ```
     pub fn address(&self) -> Ipv4Addr {
         self.address
     }
 
+    /// Returns the prefix length (the number after the `/`).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ipnet_rs::Ipv4Cidr;
+    ///
+    /// let cidr: Ipv4Cidr = "10.0.0.0/8".parse().unwrap();
+    /// assert_eq!(cidr.prefix_len(), 8);
+    /// ```
     pub fn prefix_len(&self) -> u8 {
         self.prefix_len
     }
 
-    // Returns the netmask as a 32-bit integer.
+    /// Returns the netmask as a 32-bit integer. Used internally for
+    /// bit arithmetic.
     fn netmask_bits(&self) -> u32 {
         if self.prefix_len == 0 {
             0
@@ -73,30 +148,98 @@ impl Ipv4Cidr {
         }
     }
 
-    // Returns the network as an Ipv4 address
+    /// Returns the netmask as an [`Ipv4Addr`].
+    ///
+    /// For a `/24` this is `255.255.255.0`. For a `/0` it is `0.0.0.0`.
+    /// For a `/32` it is `255.255.255.255`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ipnet_rs::{Ipv4Addr, Ipv4Cidr};
+    ///
+    /// let cidr: Ipv4Cidr = "192.168.1.0/24".parse().unwrap();
+    /// assert_eq!(cidr.netmask(), Ipv4Addr::new(255, 255, 255, 0));
+    /// ```
     pub fn netmask(&self) -> Ipv4Addr {
         Ipv4Addr::from_bits(self.netmask_bits())
     }
 
-    /// Returns the network address (the address with all host bits zero).
+    /// Returns the network address (the address with all host bits cleared).
+    ///
+    /// For `192.168.1.42/24`, the network address is `192.168.1.0`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ipnet_rs::{Ipv4Addr, Ipv4Cidr};
+    ///
+    /// let cidr: Ipv4Cidr = "192.168.1.42/24".parse().unwrap();
+    /// assert_eq!(cidr.network(), Ipv4Addr::new(192, 168, 1, 0));
+    /// ```
     pub fn network(&self) -> Ipv4Addr {
         Ipv4Addr::from_bits(self.address.to_bits() & self.netmask_bits())
     }
 
-    /// Returns the broadcast address (the address with all host bits one).
+    /// Returns the broadcast address (the address with all host bits set).
+    ///
+    /// For `192.168.1.0/24`, the broadcast address is `192.168.1.255`.
+    /// For a `/32`, the broadcast equals the network address.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ipnet_rs::{Ipv4Addr, Ipv4Cidr};
+    ///
+    /// let cidr: Ipv4Cidr = "192.168.1.0/24".parse().unwrap();
+    /// assert_eq!(cidr.broadcast(), Ipv4Addr::new(192, 168, 1, 255));
+    /// ```
     pub fn broadcast(&self) -> Ipv4Addr {
         Ipv4Addr::from_bits(self.address.to_bits() | !self.netmask_bits())
     }
 
     /// Returns the total number of addresses in the network, including
-    /// network and broadcast addresses.
+    /// the network and broadcast addresses.
+    ///
+    /// For a `/24` this is 256. For a `/0` it is 2³² (4,294,967,296),
+    /// which is why the return type is `u64`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ipnet_rs::Ipv4Cidr;
+    ///
+    /// let cidr: Ipv4Cidr = "192.168.1.0/24".parse().unwrap();
+    /// assert_eq!(cidr.total_addresses(), 256);
+    ///
+    /// let cidr: Ipv4Cidr = "10.0.0.0/8".parse().unwrap();
+    /// assert_eq!(cidr.total_addresses(), 16_777_216);
+    /// ```
     pub fn total_addresses(&self) -> u64 {
         1u64 << (32 - self.prefix_len)
     }
 
-    /// Returns the number of host addressses (excluding network and broadcast).
-    /// for /31 and /32 networks, returns the total instead of subtracting,
-    /// since those have special semantics (point-point and host route).
+    /// Returns the number of usable host addresses, excluding the network
+    /// and broadcast addresses.
+    ///
+    /// Special cases per RFC 3021 and RFC 3627:
+    /// - For `/31`, returns 2 (both addresses are usable on point-to-point links).
+    /// - For `/32`, returns 1 (a host route to a single address).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ipnet_rs::Ipv4Cidr;
+    ///
+    /// let cidr: Ipv4Cidr = "192.168.1.0/24".parse().unwrap();
+    /// assert_eq!(cidr.usable_hosts(), 254);
+    ///
+    /// let cidr: Ipv4Cidr = "10.0.0.0/31".parse().unwrap();
+    /// assert_eq!(cidr.usable_hosts(), 2);
+    ///
+    /// let cidr: Ipv4Cidr = "10.0.0.1/32".parse().unwrap();
+    /// assert_eq!(cidr.usable_hosts(), 1);
+    /// ```
     pub fn usable_hosts(&self) -> u64 {
         match self.prefix_len {
             32 => 1,
@@ -105,13 +248,38 @@ impl Ipv4Cidr {
         }
     }
 
-    /// Returns true if the given address is in this network.
+    /// Returns `true` if the given address belongs to this network.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ipnet_rs::{Ipv4Addr, Ipv4Cidr};
+    ///
+    /// let cidr: Ipv4Cidr = "192.168.1.0/24".parse().unwrap();
+    /// assert!(cidr.contains(Ipv4Addr::new(192, 168, 1, 42)));
+    /// assert!(!cidr.contains(Ipv4Addr::new(192, 168, 2, 0)));
+    /// ```
     pub fn contains(&self, addr: Ipv4Addr) -> bool {
         addr.to_bits() & self.netmask_bits() == self.network().to_bits()
     }
 
-    /// Returns an iterator over all addresses in the network,
-    /// including the network and broadcast addresses.
+    /// Returns an iterator over every address in the network, including
+    /// the network and broadcast addresses.
+    ///
+    /// For large networks this iterator can yield billions of addresses;
+    /// combine it with [`Iterator::take`] or [`Iterator::filter`] as needed.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ipnet_rs::{Ipv4Addr, Ipv4Cidr};
+    ///
+    /// let cidr: Ipv4Cidr = "192.168.1.0/30".parse().unwrap();
+    /// let all: Vec<Ipv4Addr> = cidr.addresses().collect();
+    /// assert_eq!(all.len(), 4);
+    /// assert_eq!(all[0], Ipv4Addr::new(192, 168, 1, 0));
+    /// assert_eq!(all[3], Ipv4Addr::new(192, 168, 1, 3));
+    /// ```
     pub fn addresses(&self) -> Ipv4CidrIter {
         Ipv4CidrIter {
             current: self.network().to_bits(),
@@ -120,9 +288,24 @@ impl Ipv4Cidr {
         }
     }
 
-    /// Returns an iterator over the usable host addresses,
-    /// excluding the network and broadcast addresses.
-    /// For /31 and /32 networks, returns all addresses.
+    /// Returns an iterator over the usable host addresses, excluding
+    /// the network and broadcast addresses.
+    ///
+    /// For `/31` and `/32` networks, returns all addresses (matching
+    /// [`usable_hosts`](Self::usable_hosts) semantics).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ipnet_rs::{Ipv4Addr, Ipv4Cidr};
+    ///
+    /// let cidr: Ipv4Cidr = "192.168.1.0/30".parse().unwrap();
+    /// let hosts: Vec<Ipv4Addr> = cidr.hosts().collect();
+    /// assert_eq!(hosts, vec![
+    ///     Ipv4Addr::new(192, 168, 1, 1),
+    ///     Ipv4Addr::new(192, 168, 1, 2),
+    /// ]);
+    /// ```
     pub fn hosts(&self) -> Ipv4CidrIter {
         match self.prefix_len {
             31 | 32 => self.addresses(),
@@ -134,14 +317,38 @@ impl Ipv4Cidr {
         }
     }
 
-    /// Same as `addresses()`, provided for consistency with stdlib conventions.
+    /// Same as [`addresses`](Self::addresses). Provided for consistency
+    /// with stdlib iteration conventions (`.iter()` on a collection).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ipnet_rs::Ipv4Cidr;
+    ///
+    /// let cidr: Ipv4Cidr = "10.0.0.0/30".parse().unwrap();
+    /// assert_eq!(cidr.iter().count(), 4);
+    /// ```
     pub fn iter(&self) -> Ipv4CidrIter {
         self.addresses()
     }
 
-    /// Splits this network into smaller subnets of the given prefix length.
-    /// Returns an empty vector if the new prefix length is not larger than
-    /// the current one (you can't split into bigger networks).
+    /// Splits this network into smaller subnets at the given prefix length.
+    ///
+    /// Returns an empty `Vec` if the new prefix length is not strictly
+    /// larger than the current one, or if it is greater than 32. (You
+    /// cannot split a network into bigger networks.)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ipnet_rs::Ipv4Cidr;
+    ///
+    /// let cidr: Ipv4Cidr = "192.168.1.0/24".parse().unwrap();
+    /// let subnets = cidr.split(26);
+    /// assert_eq!(subnets.len(), 4);
+    /// assert_eq!(subnets[0].to_string(), "192.168.1.0/26");
+    /// assert_eq!(subnets[3].to_string(), "192.168.1.192/26");
+    /// ```
     pub fn split(&self, new_prefix_len: u8) -> Vec<Ipv4Cidr> {
         if new_prefix_len <= self.prefix_len || new_prefix_len > 32 {
             return Vec::new();

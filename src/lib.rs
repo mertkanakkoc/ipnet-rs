@@ -1,7 +1,17 @@
 //! ipnet-rs: a small IPv4 networking library
 //!
 //! This crate provides types for working with IPv4 addresses and CIDR networks.
-
+//! It supports parsing, formatting, iteration, subnet arithmetic, and splitting.
+//!
+//! # Quick start
+//!
+//! ```
+//! use ipnet_rs::{Ipv4Addr, Ipv4Cidr};
+//!
+//! let net: Ipv4Cidr = "192.168.1.0/24".parse().unwrap();
+//! assert_eq!(net.network(), Ipv4Addr::new(192, 168, 1, 0));
+//! assert_eq!(net.usable_hosts(), 254);
+//! ```
 mod cidr;
 mod error;
 use std::fmt;
@@ -10,23 +20,37 @@ use std::str::FromStr;
 pub use cidr::Ipv4Cidr;
 pub use error::ParseError;
 
+/// An IPv4 address.
+///
+/// Internally stored as four octets. The type is `Copy` since it only
+/// holds 4 bytes of stack data.
+///
+/// # Examples
+///
+/// ```
+/// use ipnet_rs::Ipv4Addr;
+///
+/// let addr = Ipv4Addr::new(192, 168, 1, 1);
+/// assert_eq!(addr.to_string(), "192.168.1.1");
+///
+/// let parsed: Ipv4Addr = "10.0.0.1".parse().unwrap();
+/// assert_eq!(parsed.octets(), [10, 0, 0, 1]);
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Ipv4Addr {
     octets: [u8; 4],
 }
 
 impl Ipv4Addr {
-    /// Creates a new IPv4 address from four octets.
+    /// Creates an IPv4 address from four octets.
     ///
-    /// # Example
+    /// # Examples
+    ///
     /// ```
     /// use ipnet_rs::Ipv4Addr;
     ///
     /// let addr = Ipv4Addr::new(192, 168, 1, 1);
     /// assert_eq!(addr.to_string(), "192.168.1.1");
-    ///
-    /// let parsed: Ipv4Addr = "192.168.1.1".parse().unwrap();
-    /// assert_eq!(addr, parsed);
     /// ```
     pub fn new(a: u8, b: u8, c: u8, d: u8) -> Self {
         Self {
@@ -34,17 +58,48 @@ impl Ipv4Addr {
         }
     }
 
-    /// Returns the four octests of the address.
+    /// Returns the four octets of the address.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ipnet_rs::Ipv4Addr;
+    ///
+    /// let addr = Ipv4Addr::new(10, 20, 30, 40);
+    /// assert_eq!(addr.octets(), [10, 20, 30, 40]);
+    /// ```
     pub fn octets(&self) -> [u8; 4] {
         self.octets
     }
 
     /// Returns the address as a 32-bit integer in host byte order.
+    ///
+    /// The first octet becomes the most-significant byte of the result.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ipnet_rs::Ipv4Addr;
+    ///
+    /// let addr = Ipv4Addr::new(192, 168, 1, 1);
+    /// assert_eq!(addr.to_bits(), 0xC0A80101);
+    /// ```
     pub fn to_bits(&self) -> u32 {
         u32::from_be_bytes(self.octets)
     }
 
     /// Creates an address from a 32-bit integer in host byte order.
+    ///
+    /// The most-significant byte becomes the first octet.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ipnet_rs::Ipv4Addr;
+    ///
+    /// let addr = Ipv4Addr::from_bits(0xC0A80101);
+    /// assert_eq!(addr, Ipv4Addr::new(192, 168, 1, 1));
+    /// ```
     pub fn from_bits(bits: u32) -> Self {
         Self {
             octets: bits.to_be_bytes(),
