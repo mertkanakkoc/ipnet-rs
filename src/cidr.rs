@@ -2,6 +2,40 @@ use crate::{Ipv4Addr, ParseError};
 use std::fmt;
 use std::str::FromStr;
 
+/// An iterator over the addresses in a network
+pub struct Ipv4CidrIter {
+    current: u32,
+    end: u32,
+    done: bool,
+}
+
+impl Iterator for Ipv4CidrIter {
+    type Item = Ipv4Addr;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.done {
+            return None;
+        }
+        let addr = Ipv4Addr::from_bits(self.current);
+        if self.current == self.end {
+            self.done = true;
+        } else {
+            self.current += 1;
+        }
+
+        Some(addr)
+    }
+}
+
+impl IntoIterator for &Ipv4Cidr {
+    type Item = Ipv4Addr;
+    type IntoIter = Ipv4CidrIter;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.addresses()
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Ipv4Cidr {
     address: Ipv4Addr,
@@ -74,6 +108,30 @@ impl Ipv4Cidr {
     /// Returns true if the given address is in this network.
     pub fn contains(&self, addr: Ipv4Addr) -> bool {
         addr.to_bits() & self.netmask_bits() == self.network().to_bits()
+    }
+
+    /// Returns an iterator over all addresses in the network,
+    /// including the network and broadcast addresses.
+    pub fn addresses(&self) -> Ipv4CidrIter {
+        Ipv4CidrIter {
+            current: self.network().to_bits(),
+            end: self.broadcast().to_bits(),
+            done: false,
+        }
+    }
+
+    /// Returns an iterator over the usable host addresses,
+    /// excluding the network and broadcast addresses.
+    /// For /31 and /32 networks, returns all addresses.
+    pub fn hosts(&self) -> Ipv4CidrIter {
+        match self.prefix_len {
+            31 | 32 => self.addresses(),
+            _ => Ipv4CidrIter {
+                current: self.network().to_bits() + 1,
+                end: self.broadcast().to_bits() - 1,
+                done: false,
+            },
+        }
     }
 }
 
@@ -174,5 +232,72 @@ mod tests {
         assert!(cidr.contains(Ipv4Addr::new(192, 168, 1, 255)));
         assert!(!cidr.contains(Ipv4Addr::new(192, 168, 2, 0)));
         assert!(!cidr.contains(Ipv4Addr::new(10, 0, 0, 1)));
+    }
+
+    #[test]
+    fn iterates_addresses() {
+        let cidr: Ipv4Cidr = "192.168.1.0/30".parse().unwrap();
+        let addrs: Vec<Ipv4Addr> = cidr.addresses().collect();
+        assert_eq!(
+            addrs,
+            vec![
+                Ipv4Addr::new(192, 168, 1, 0),
+                Ipv4Addr::new(192, 168, 1, 1),
+                Ipv4Addr::new(192, 168, 1, 2),
+                Ipv4Addr::new(192, 168, 1, 3),
+            ]
+        );
+    }
+
+    #[test]
+    fn iterates_hosts() {
+        let cidr: Ipv4Cidr = "192.168.1.0/30".parse().unwrap();
+        let hosts: Vec<Ipv4Addr> = cidr.hosts().collect();
+        assert_eq!(
+            hosts,
+            vec![Ipv4Addr::new(192, 168, 1, 1), Ipv4Addr::new(192, 168, 1, 2),]
+        );
+    }
+
+    #[test]
+    fn iterates_single_host_for_32() {
+        let cidr: Ipv4Cidr = "10.0.0.1/32".parse().unwrap();
+        let hosts: Vec<Ipv4Addr> = cidr.hosts().collect();
+        assert_eq!(hosts, vec![Ipv4Addr::new(10, 0, 0, 1)]);
+    }
+
+    #[test]
+    fn iterates_two_hosts_for_31() {
+        let cidr: Ipv4Cidr = "10.0.0.0/31".parse().unwrap();
+        let hosts: Vec<Ipv4Addr> = cidr.hosts().collect();
+        assert_eq!(
+            hosts,
+            vec![Ipv4Addr::new(10, 0, 0, 0), Ipv4Addr::new(10, 0, 0, 1),]
+        );
+    }
+
+    #[test]
+    fn for_loop_works() {
+        let cidr: Ipv4Cidr = "192.168.1.0/30".parse().unwrap();
+        let mut count = 0;
+        for _addr in &cidr {
+            count += 1;
+        }
+        assert_eq!(count, 4);
+    }
+
+    #[test]
+    fn iterator_combinators_work() {
+        let cidr: Ipv4Cidr = "10.0.0.0/24".parse().unwrap();
+
+        // Filter to addresses ending in even number, take 5.
+        let evens: Vec<Ipv4Addr> = cidr
+            .hosts()
+            .filter(|a| a.octets()[3] % 2 == 0)
+            .take(5)
+            .collect();
+        assert_eq!(evens.len(), 5);
+        assert_eq!(evens[0], Ipv4Addr::new(10, 0, 0, 2));
+        assert_eq!(evens[4], Ipv4Addr::new(10, 0, 0, 10));
     }
 }
