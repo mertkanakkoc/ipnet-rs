@@ -38,6 +38,18 @@ impl Ipv4Addr {
     pub fn octets(&self) -> [u8; 4] {
         self.octets
     }
+
+    /// Returns the address as a 32-bit integer in host byte order.
+    pub fn to_bits(&self) -> u32 {
+        u32::from_be_bytes(self.octets)
+    }
+
+    /// Creates an address from a 32-bit integer in host byte order.
+    pub fn from_bits(bits: u32) -> Self {
+        Self {
+            octets: bits.to_be_bytes(),
+        }
+    }
 }
 
 impl fmt::Display for Ipv4Addr {
@@ -108,5 +120,23 @@ mod tests {
     fn rejects_non_numeric_octet() {
         let result: Result<Ipv4Addr, _> = "192.168.1.abc".parse();
         assert!(matches!(result, Err(ParseError::InvalidOctet(_))));
+    }
+
+    #[test]
+    fn converts_to_bits() {
+        let addr = Ipv4Addr::new(192, 168, 1, 1);
+        assert_eq!(addr.to_bits(), 0xC0A80101);
+    }
+
+    #[test]
+    fn converts_from_bits() {
+        let addr = Ipv4Addr::from_bits(0xC0A80101);
+        assert_eq!(addr, Ipv4Addr::new(192, 168, 1, 1));
+    }
+
+    #[test]
+    fn bits_roundtrip() {
+        let addr = Ipv4Addr::new(10, 20, 30, 40);
+        assert_eq!(Ipv4Addr::from_bits(addr.to_bits()), addr);
     }
 }
